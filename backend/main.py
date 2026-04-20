@@ -287,65 +287,58 @@ def update_all_rows(body: dict):
     if not rows:
         raise HTTPException(400, "No rows provided")
 
-    conn = get_conn()
     try:
-        cur = conn.cursor()
+        with get_conn() as conn:
+            cur = conn.cursor()
 
-        # Fetch all existing rows in ONE query
-        ids = [r["id"] for r in rows]
-        cur.execute("SELECT * FROM daily_working WHERE id = ANY(%s)", (ids,))
-        existing_map = {r["id"]: dict(r) for r in cur.fetchall()}
+            ids = [r["id"] for r in rows]
+            cur.execute("SELECT * FROM daily_working WHERE id = ANY(%s)", (ids,))
+            existing_map = {r["id"]: dict(r) for r in cur.fetchall()}
 
-        # Compute all updates in Python
-        update_params = []
-        for row in rows:
-            rid = row["id"]
-            if rid not in existing_map:
-                continue
-            ex = existing_map[rid]
-            def flt(k): return float(row.get(k) or ex.get(k) or 0)
-            c = calc_row(
-                no_of_spindles=ex["spindles_installed"],
-                std_hank=float(ex["std_hank"] or 0),
-                act_hank=flt("act_hank"), stop_min=flt("stop_min"),
-                conv_factor=flt("conv_factor"), conv_40s=flt("conv_40s") or 1,
-                pne_bondas=flt("pne_bondas"),
-                woh=flt("woh"), mw=flt("mw"), clg_lc=flt("clg_lc"),
-                er=flt("er"), la_pf=flt("la_pf"), bss=flt("bss"),
-                lap=flt("lap"), dd=flt("dd"),
-            )
-            update_params.append((
-                flt("act_hank"), flt("stop_min"), flt("pne_bondas"),
-                c.worked_spindles, c.target_kgs, c.prodn_kgs,
-                c.waste_pct, c.actual_prdn,
-                c.std_gps, c.actual_gps, c.diff_plus_minus,
-                c.con_40s_gps, c.eff_pct,
-                flt("woh"), flt("mw"), flt("clg_lc"), flt("er"), flt("la_pf"),
-                flt("bss"), flt("lap"), flt("dd"), c.total_stop,
-                rid,
-            ))
+            update_params = []
+            for row in rows:
+                rid = row["id"]
+                if rid not in existing_map:
+                    continue
+                ex = existing_map[rid]
+                def flt(k): return float(row.get(k) or ex.get(k) or 0)
+                c = calc_row(
+                    no_of_spindles=ex["spindles_installed"],
+                    std_hank=float(ex["std_hank"] or 0),
+                    act_hank=flt("act_hank"), stop_min=flt("stop_min"),
+                    conv_factor=flt("conv_factor"), conv_40s=flt("conv_40s") or 1,
+                    pne_bondas=flt("pne_bondas"),
+                    woh=flt("woh"), mw=flt("mw"), clg_lc=flt("clg_lc"),
+                    er=flt("er"), la_pf=flt("la_pf"), bss=flt("bss"),
+                    lap=flt("lap"), dd=flt("dd"),
+                )
+                update_params.append((
+                    flt("act_hank"), flt("stop_min"), flt("pne_bondas"),
+                    c.worked_spindles, c.target_kgs, c.prodn_kgs,
+                    c.waste_pct, c.actual_prdn,
+                    c.std_gps, c.actual_gps, c.diff_plus_minus,
+                    c.con_40s_gps, c.eff_pct,
+                    flt("woh"), flt("mw"), flt("clg_lc"), flt("er"), flt("la_pf"),
+                    flt("bss"), flt("lap"), flt("dd"), c.total_stop,
+                    rid,
+                ))
 
-        # Single bulk UPDATE — one executemany for all rows
-        cur.executemany("""
-            UPDATE daily_working SET
-                act_hank=%s, stop_min=%s, pne_bondas=%s,
-                worked_spindles=%s, target_kgs=%s, prodn_kgs=%s,
-                waste_pct=%s, actual_prdn=%s,
-                std_gps=%s, actual_gps=%s, diff_plus_minus=%s,
-                con_40s_gps=%s, eff_pct=%s,
-                woh=%s, mw=%s, clg_lc=%s, er=%s, la_pf=%s,
-                bss=%s, lap=%s, dd=%s, total_stop=%s, updated_at=NOW()
-            WHERE id=%s
-        """, update_params)
+            cur.executemany("""
+                UPDATE daily_working SET
+                    act_hank=%s, stop_min=%s, pne_bondas=%s,
+                    worked_spindles=%s, target_kgs=%s, prodn_kgs=%s,
+                    waste_pct=%s, actual_prdn=%s,
+                    std_gps=%s, actual_gps=%s, diff_plus_minus=%s,
+                    con_40s_gps=%s, eff_pct=%s,
+                    woh=%s, mw=%s, clg_lc=%s, er=%s, la_pf=%s,
+                    bss=%s, lap=%s, dd=%s, total_stop=%s, updated_at=NOW()
+                WHERE id=%s
+            """, update_params)
 
-        updated = len(update_params)
-        conn.commit()
-        cur.close()
+            updated = len(update_params)
+            conn.commit()
     except Exception as e:
-        conn.rollback()
         raise HTTPException(500, f"Bulk update failed: {str(e)}")
-    finally:
-        conn.close()
 
     return {"updated": updated}
 
@@ -523,111 +516,100 @@ def delete_count(count_id: int):
 # ── Admin Control ─────────────────────────────────────────────────────────
 @app.post("/api/admin/insert-daily-working")
 def admin_insert_daily_working(body: AdminInsertIn):
-    conn = get_conn()
     try:
-        cur = conn.cursor()
+        with get_conn() as conn:
+            cur = conn.cursor()
 
-        # Step 1: load frames from machine master
-        cur.execute("""
-            SELECT m.*,
-                   COALESCE(c.conv_40s, 1)                     AS conv_40s,
-                   COALESCE(c.actual_count, 0)                 AS actual_count,
-                   COALESCE(c.spinning_count_efficiency, 0)    AS spinning_count_efficiency,
-                   COALESCE(c.spinning_std_hank_efficiency, 0) AS spinning_std_hank_efficiency
-            FROM machine_master m
-            LEFT JOIN count_master c ON c.count = m.count
-            WHERE m.mill = %s ORDER BY m.id
-        """, (body.mill,))
-        raw_frames = [dict(r) for r in cur.fetchall()]
-        if not raw_frames:
-            raise HTTPException(404, f"No frames found for mill {body.mill}")
-
-        # Compute derived values
-        frames = []
-        for r in raw_frames:
-            r["conv_factor"] = calc_conversion_factor(r["actual_count"], r["spinning_count_efficiency"])
-            r["std_hank"]    = calc_std_hank(r["spinning_std_hank_efficiency"], r["spdl_speed"], r["tpi"])
-            frames.append(r)
-
-        # Step 2: find which rf_nos already exist for this exact date/shift/mill
-        cur.execute(
-            "SELECT rf_no FROM daily_working WHERE date=%s AND shift=%s AND mill=%s",
-            (body.date, body.shift, body.mill)
-        )
-        existing_rf_nos = {r["rf_no"] for r in cur.fetchall()}
-
-        # Step 3: only insert frames that don't already exist
-        frames_to_insert = [f for f in frames if f["rf_no"] not in existing_rf_nos]
-        skipped = len(frames) - len(frames_to_insert)
-
-        if not frames_to_insert:
-            # Nothing to insert — all already exist
-            conn.rollback()
-            return {
-                "success": True,
-                "inserted": 0,
-                "skipped": skipped,
-                "total_frames": len(frames),
-                "message": f"All {skipped} frames already exist for {body.mill} · {body.shift} · {body.date}. Nothing inserted.",
-            }
-
-        # Step 4: create a production run and insert only the new frames
-        run_id = str(uuid.uuid4())
-        cur.execute(
-            "INSERT INTO production_runs (run_id,entry_date,mill,department,shift) VALUES (%s,%s,%s,'SPINNING',%s)",
-            (run_id, body.date, body.mill, body.shift)
-        )
-
-        inserted = 0
-        for frame in frames_to_insert:
-            row_id = str(uuid.uuid4()).replace("-","")[:8]
-            c = calc_row(
-                no_of_spindles=frame["no_of_spindles"],
-                std_hank=frame["std_hank"],
-                act_hank=0, stop_min=0, pne_bondas=0,
-                conv_factor=frame["conv_factor"],
-                conv_40s=frame["conv_40s"],
-            )
             cur.execute("""
-                INSERT INTO daily_working (
-                    id, run_id, date, shift, mill, department,
-                    spindles_installed, rf_no, count, spdl_speed, tpi, std_hank,
-                    conv_factor, conv_40s,
-                    act_hank, stop_min, pne_bondas,
-                    worked_spindles, target_kgs, prodn_kgs,
-                    waste_pct, actual_prdn,
-                    std_gps, actual_gps, diff_plus_minus, con_40s_gps, eff_pct,
-                    woh, mw, clg_lc, er, la_pf, bss, lap, dd, total_stop
-                ) VALUES (
-                    %s,%s,%s,%s,%s,'SPINNING',
-                    %s,%s,%s,%s,%s,%s,
-                    %s,%s,
-                    0,0,0,
-                    %s,%s,%s,
-                    %s,%s,
-                    %s,%s,%s,%s,%s,
-                    0,0,0,0,0,0,0,0,0
-                )
-            """, (
-                row_id, run_id, body.date, body.shift, body.mill,
-                frame["no_of_spindles"], frame["rf_no"], frame["count"],
-                frame["spdl_speed"], frame["tpi"], frame["std_hank"],
-                frame["conv_factor"], frame["conv_40s"],
-                c.worked_spindles, c.target_kgs, c.prodn_kgs,
-                c.waste_pct, c.actual_prdn,
-                c.std_gps, c.actual_gps, c.diff_plus_minus, c.con_40s_gps, c.eff_pct,
-            ))
-            inserted += 1
+                SELECT m.*,
+                       COALESCE(c.conv_40s, 1)                     AS conv_40s,
+                       COALESCE(c.actual_count, 0)                 AS actual_count,
+                       COALESCE(c.spinning_count_efficiency, 0)    AS spinning_count_efficiency,
+                       COALESCE(c.spinning_std_hank_efficiency, 0) AS spinning_std_hank_efficiency
+                FROM machine_master m
+                LEFT JOIN count_master c ON c.count = m.count
+                WHERE m.mill = %s ORDER BY m.id
+            """, (body.mill,))
+            raw_frames = [dict(r) for r in cur.fetchall()]
+            if not raw_frames:
+                raise HTTPException(404, f"No frames found for mill {body.mill}")
 
-        conn.commit()
-        cur.close()
+            frames = []
+            for r in raw_frames:
+                r["conv_factor"] = calc_conversion_factor(r["actual_count"], r["spinning_count_efficiency"])
+                r["std_hank"]    = calc_std_hank(r["spinning_std_hank_efficiency"], r["spdl_speed"], r["tpi"])
+                frames.append(r)
+
+            cur.execute(
+                "SELECT rf_no FROM daily_working WHERE date=%s AND shift=%s AND mill=%s",
+                (body.date, body.shift, body.mill)
+            )
+            existing_rf_nos = {r["rf_no"] for r in cur.fetchall()}
+
+            frames_to_insert = [f for f in frames if f["rf_no"] not in existing_rf_nos]
+            skipped = len(frames) - len(frames_to_insert)
+
+            if not frames_to_insert:
+                return {
+                    "success": True,
+                    "inserted": 0,
+                    "skipped": skipped,
+                    "total_frames": len(frames),
+                    "message": f"All {skipped} frames already exist for {body.mill} · {body.shift} · {body.date}. Nothing inserted.",
+                }
+
+            run_id = str(uuid.uuid4())
+            cur.execute(
+                "INSERT INTO production_runs (run_id,entry_date,mill,department,shift) VALUES (%s,%s,%s,'SPINNING',%s)",
+                (run_id, body.date, body.mill, body.shift)
+            )
+
+            inserted = 0
+            for frame in frames_to_insert:
+                row_id = str(uuid.uuid4()).replace("-","")[:8]
+                c = calc_row(
+                    no_of_spindles=frame["no_of_spindles"],
+                    std_hank=frame["std_hank"],
+                    act_hank=0, stop_min=0, pne_bondas=0,
+                    conv_factor=frame["conv_factor"],
+                    conv_40s=frame["conv_40s"],
+                )
+                cur.execute("""
+                    INSERT INTO daily_working (
+                        id, run_id, date, shift, mill, department,
+                        spindles_installed, rf_no, count, spdl_speed, tpi, std_hank,
+                        conv_factor, conv_40s,
+                        act_hank, stop_min, pne_bondas,
+                        worked_spindles, target_kgs, prodn_kgs,
+                        waste_pct, actual_prdn,
+                        std_gps, actual_gps, diff_plus_minus, con_40s_gps, eff_pct,
+                        woh, mw, clg_lc, er, la_pf, bss, lap, dd, total_stop
+                    ) VALUES (
+                        %s,%s,%s,%s,%s,'SPINNING',
+                        %s,%s,%s,%s,%s,%s,
+                        %s,%s,
+                        0,0,0,
+                        %s,%s,%s,
+                        %s,%s,
+                        %s,%s,%s,%s,%s,
+                        0,0,0,0,0,0,0,0,0
+                    )
+                """, (
+                    row_id, run_id, body.date, body.shift, body.mill,
+                    frame["no_of_spindles"], frame["rf_no"], frame["count"],
+                    frame["spdl_speed"], frame["tpi"], frame["std_hank"],
+                    frame["conv_factor"], frame["conv_40s"],
+                    c.worked_spindles, c.target_kgs, c.prodn_kgs,
+                    c.waste_pct, c.actual_prdn,
+                    c.std_gps, c.actual_gps, c.diff_plus_minus, c.con_40s_gps, c.eff_pct,
+                ))
+                inserted += 1
+
+            conn.commit()
     except HTTPException:
         raise
     except Exception as e:
-        conn.rollback()
         raise HTTPException(500, f"Insert failed: {str(e)}")
-    finally:
-        conn.close()
 
     return {
         "success": True,
@@ -728,51 +710,32 @@ def report_pdf(
 
 @app.delete("/api/daily-working/duplicates")
 def delete_duplicates(date: str = Query(...), shift: str = Query(...), mill: str = Query(...)):
-    """
-    For a given date/shift/mill, keep only the LATEST record per rf_no
-    and delete all older duplicates. Returns count of deleted rows.
-    """
-    conn = get_conn()
     try:
-        cur = conn.cursor()
-
-        # Step 1: find all rf_nos that have duplicates
-        cur.execute("""
-            SELECT rf_no, COUNT(*) as cnt
-            FROM daily_working
-            WHERE date = %s AND shift = %s AND mill = %s
-            GROUP BY rf_no
-            HAVING COUNT(*) > 1
-        """, (date, shift, mill))
-        dup_rf_nos = [r["rf_no"] for r in cur.fetchall()]
-
-        total_deleted = 0
-
-        # Step 2: for each duplicate rf_no, keep only the latest id
-        for rf_no in dup_rf_nos:
+        with get_conn() as conn:
+            cur = conn.cursor()
             cur.execute("""
-                SELECT id FROM daily_working
-                WHERE date = %s AND shift = %s AND mill = %s AND rf_no = %s
-                ORDER BY created_at DESC
-            """, (date, shift, mill, rf_no))
-            ids = [r["id"] for r in cur.fetchall()]
-            keep_id = ids[0]           # latest
-            delete_ids = ids[1:]       # all older ones
-
-            if delete_ids:
-                cur.execute(
-                    "DELETE FROM daily_working WHERE id = ANY(%s)",
-                    (delete_ids,)
-                )
-                total_deleted += cur.rowcount
-
-        conn.commit()
-        cur.close()
+                SELECT rf_no, COUNT(*) as cnt
+                FROM daily_working
+                WHERE date = %s AND shift = %s AND mill = %s
+                GROUP BY rf_no
+                HAVING COUNT(*) > 1
+            """, (date, shift, mill))
+            dup_rf_nos = [r["rf_no"] for r in cur.fetchall()]
+            total_deleted = 0
+            for rf_no in dup_rf_nos:
+                cur.execute("""
+                    SELECT id FROM daily_working
+                    WHERE date = %s AND shift = %s AND mill = %s AND rf_no = %s
+                    ORDER BY created_at DESC
+                """, (date, shift, mill, rf_no))
+                ids = [r["id"] for r in cur.fetchall()]
+                delete_ids = ids[1:]
+                if delete_ids:
+                    cur.execute("DELETE FROM daily_working WHERE id = ANY(%s)", (delete_ids,))
+                    total_deleted += cur.rowcount
+            conn.commit()
     except Exception as e:
-        conn.rollback()
         raise HTTPException(500, f"Dedup failed: {str(e)}")
-    finally:
-        conn.close()
 
     return {
         "deleted": total_deleted,
@@ -826,44 +789,31 @@ def add_unique_constraint():
 
 @app.delete("/api/daily-working/duplicates/all")
 def delete_all_duplicates():
-    """
-    Clean ALL duplicates across entire daily_working table.
-    Keeps the latest record per (date, shift, mill, rf_no).
-    """
-    conn = get_conn()
     try:
-        cur = conn.cursor()
-
-        # Find all duplicate groups
-        cur.execute("""
-            SELECT date, shift, mill, rf_no, COUNT(*) as cnt
-            FROM daily_working
-            GROUP BY date, shift, mill, rf_no
-            HAVING COUNT(*) > 1
-        """)
-        dup_groups = cur.fetchall()
-        total_deleted = 0
-
-        for g in dup_groups:
+        with get_conn() as conn:
+            cur = conn.cursor()
             cur.execute("""
-                SELECT id FROM daily_working
-                WHERE date = %s AND shift = %s AND mill = %s AND rf_no = %s
-                ORDER BY created_at DESC
-            """, (g["date"], g["shift"], g["mill"], g["rf_no"]))
-            ids = [r["id"] for r in cur.fetchall()]
-            keep_id  = ids[0]
-            del_ids  = ids[1:]
-            if del_ids:
-                cur.execute("DELETE FROM daily_working WHERE id = ANY(%s)", (del_ids,))
-                total_deleted += cur.rowcount
-
-        conn.commit()
-        cur.close()
+                SELECT date, shift, mill, rf_no, COUNT(*) as cnt
+                FROM daily_working
+                GROUP BY date, shift, mill, rf_no
+                HAVING COUNT(*) > 1
+            """)
+            dup_groups = cur.fetchall()
+            total_deleted = 0
+            for g in dup_groups:
+                cur.execute("""
+                    SELECT id FROM daily_working
+                    WHERE date = %s AND shift = %s AND mill = %s AND rf_no = %s
+                    ORDER BY created_at DESC
+                """, (g["date"], g["shift"], g["mill"], g["rf_no"]))
+                ids = [r["id"] for r in cur.fetchall()]
+                del_ids = ids[1:]
+                if del_ids:
+                    cur.execute("DELETE FROM daily_working WHERE id = ANY(%s)", (del_ids,))
+                    total_deleted += cur.rowcount
+            conn.commit()
     except Exception as e:
-        conn.rollback()
         raise HTTPException(500, f"Bulk dedup failed: {str(e)}")
-    finally:
-        conn.close()
 
     return {
         "deleted": total_deleted,
