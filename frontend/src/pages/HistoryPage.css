@@ -1,0 +1,52 @@
+.hp { display: flex; flex-direction: column; gap: 16px; }
+.filter-card { padding: 18px 20px; }
+.filter-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.field-group { display: flex; flex-direction: column; gap: 5px; flex: 1; min-width: 130px; }
+.flabel { font-size: 10px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text3); }
+@media (max-width: 640px) {
+  .filter-row { flex-direction: column; }
+  .field-group { min-width: 100%; flex: none; }
+  .filter-row button { width: 100%; }
+}
+.htab-row { display: flex; }
+.htabs { display: flex; gap: 4px; background: var(--surface); border: 1px solid var(--border2); padding: 4px; border-radius: var(--r); }
+.htab { height: 32px; padding: 0 16px; font-size: 12px; font-weight: 500; border-radius: 6px; background: transparent; color: var(--text3); }
+.htab:hover { background: var(--surface3); color: var(--text); }
+.htab-active { background: var(--indigo) !important; color: #fff !important; box-shadow: 0 0 10px var(--indigo-glow); }
+.table-card { overflow: hidden; }
+.tscroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.htable { width: 100%; border-collapse: collapse; min-width: 1000px; font-size: 12px; }
+.htable thead th { padding: 9px 10px; font-size: 10px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text3); text-align: right; border-bottom: 1px solid var(--border2); background: var(--surface2); white-space: nowrap; position: sticky; top: 0; }
+.th-left { text-align: left !important; }
+.hrow { border-bottom: 1px solid var(--border); }
+.hrow:hover { background: var(--surface2); }
+.htable td { padding: 7px 10px; text-align: right; vertical-align: middle; }
+.td-left { text-align: left !important; }
+.td-muted { color: var(--text3); }
+.mono { font-family: 'JetBrains Mono', monospace; }
+.fw6 { font-weight: 600; }
+.val-green { color: var(--emerald) !important; }
+.val-amber { color: var(--amber) !important; }
+.val-red   { color: var(--rose) !important; }
+.rf-badge { display: inline-flex; align-items: center; padding: 2px 8px; background: var(--indigo-dim); color: var(--indigo-light); border: 1px solid rgba(99,102,241,0.22); border-radius: 20px; font-size: 11px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+.shift-badge { display: inline-flex; align-items: center; padding: 2px 7px; background: var(--cyan-dim); color: var(--cyan); border-radius: var(--r-sm); font-size: 11px; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
+.sum-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.sum-shift-card { padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.ssh-header { display: flex; align-items: center; justify-content: space-between; }
+.shift-badge-lg { font-size: 14px; font-weight: 700; color: var(--cyan); font-family: 'JetBrains Mono', monospace; }
+.ssh-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.ssh-metric { display: flex; flex-direction: column; gap: 3px; }
+.ssh-mlabel { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text3); font-weight: 600; }
+.ssh-mvalue { font-size: 18px; font-weight: 600; color: var(--text); }
+.eff-bar-wrap { display: flex; align-items: center; gap: 10px; }
+.eff-bar-bg { flex: 1; height: 6px; background: var(--surface3); border-radius: 3px; overflow: hidden; }
+.eff-bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+.eff-fill-green { background: var(--emerald); box-shadow: 0 0 8px var(--emerald-glow); }
+.eff-fill-amber { background: var(--amber); }
+.eff-fill-red   { background: var(--rose); box-shadow: 0 0 8px var(--rose-glow); }
+.eff-bar-label  { font-size: 12px; font-weight: 600; color: var(--text2); min-width: 36px; text-align: right; font-family: 'JetBrains Mono', monospace; }
+.empty { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 60px 20px; text-align: center; color: var(--text3); }
+.empty-icon { opacity: 0.5; }
+.empty p { font-size: 14px; color: var(--text2); }
+.empty strong { color: var(--text); font-weight: 600; }
+.empty-hint { font-size: 12px !important; color: var(--text3) !important; }
