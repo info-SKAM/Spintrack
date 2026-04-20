@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.env
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+frontend/dist/
+
+# Render / build artifacts
+backend/static/

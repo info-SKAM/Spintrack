@@ -1,5 +1,5 @@
 services:
-  # ── Backend: FastAPI ──────────────────────────────────────────────────────
+  # ── Backend: FastAPI (Render) ─────────────────────────────────────────────
   - type: web
     name: spintrack-api
     runtime: python
@@ -8,21 +8,6 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
-        sync: false          # Set this in Render dashboard — your Neon PostgreSQL URL
+        sync: false          # Set in Render dashboard — your Neon PostgreSQL URL
       - key: FRONTEND_ORIGIN
-        sync: false          # Set to your frontend Render URL, e.g. https://spintrack-frontend.onrender.com
-
-  # ── Frontend: React + Vite ────────────────────────────────────────────────
-  - type: web
-    name: spintrack-frontend
-    runtime: static
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    staticPublishPath: ./dist
-    envVars:
-      - key: VITE_API_URL
-        sync: false          # Set to your backend Render URL, e.g. https://spintrack-api.onrender.com
-    routes:
-      - type: rewrite
-        source: /*
-        destination: /index.html
+        sync: false          # Set to your Vercel frontend URL, e.g. https://spintrack.vercel.app
