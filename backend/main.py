@@ -3,8 +3,8 @@ import uuid
 from typing import Optional
 from functools import lru_cache
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import Response
 from dotenv import load_dotenv
 
 from database import get_conn
@@ -16,12 +16,17 @@ load_dotenv()
 
 app = FastAPI(title="SpinTrack API", version="2.0.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+@app.middleware("http")
+async def cors_middleware(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return Response(status_code=200, headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        })
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    return response
 
 
 # ── Health ────────────────────────────────────────────────────────────────
@@ -157,78 +162,69 @@ def _build_entry(row_id, run_id, body_date, body_shift, body_mill, entry, c):
 
 @app.post("/api/daily-working/save")
 def save_shift(body: SaveShiftIn):
-    conn = get_conn()
     try:
-        cur = conn.cursor()
+        with get_conn() as conn:
+            cur = conn.cursor()
 
-        # Block save entirely if ANY records already exist for this date/shift/mill
-        cur.execute(
-            "SELECT COUNT(*) AS cnt FROM daily_working WHERE date=%s AND shift=%s AND mill=%s",
-            (body.date, body.shift, body.mill)
-        )
-        existing_count = cur.fetchone()["cnt"]
-        if existing_count > 0:
-            raise HTTPException(
-                409,
-                f"Records already exist for {body.mill} / {body.shift} / {body.date} "
-                f"({existing_count} records). Load Frames from Daily Entry to update existing records."
+            cur.execute(
+                "SELECT COUNT(*) AS cnt FROM daily_working WHERE date=%s AND shift=%s AND mill=%s",
+                (body.date, body.shift, body.mill)
             )
+            existing_count = cur.fetchone()["cnt"]
+            if existing_count > 0:
+                raise HTTPException(
+                    409,
+                    f"Records already exist for {body.mill} / {body.shift} / {body.date} "
+                    f"({existing_count} records). Load Frames from Daily Entry to update existing records."
+                )
 
-        # Safe to insert — no existing records
-        run_id = str(uuid.uuid4())
-        cur.execute(
-            "INSERT INTO production_runs (run_id, entry_date, mill, department, shift) VALUES (%s,%s,%s,'SPINNING',%s)",
-            (run_id, body.date, body.mill, body.shift)
-        )
-        # Build all rows in Python first (no DB round trips)
-        all_rows = []
-        for entry in body.entries:
-            row_id = str(uuid.uuid4()).replace("-","")[:8]
-            c = calc_row(
-                no_of_spindles=entry.no_of_spindles,
-                std_hank=entry.std_hank,
-                act_hank=entry.act_hank, stop_min=entry.stop_min,
-                conv_factor=entry.conv_factor, conv_40s=entry.conv_40s,
-                pne_bondas=entry.pne_bondas,
-                woh=entry.woh, mw=entry.mw, clg_lc=entry.clg_lc,
-                er=entry.er, la_pf=entry.la_pf, bss=entry.bss,
-                lap=entry.lap, dd=entry.dd,
+            run_id = str(uuid.uuid4())
+            cur.execute(
+                "INSERT INTO production_runs (run_id, entry_date, mill, department, shift) VALUES (%s,%s,%s,'SPINNING',%s)",
+                (run_id, body.date, body.mill, body.shift)
             )
-            all_rows.append(_build_entry(row_id, run_id, body.date, body.shift, body.mill, entry, c))
+            all_rows = []
+            for entry in body.entries:
+                row_id = str(uuid.uuid4()).replace("-","")[:8]
+                c = calc_row(
+                    no_of_spindles=entry.no_of_spindles,
+                    std_hank=entry.std_hank,
+                    act_hank=entry.act_hank, stop_min=entry.stop_min,
+                    conv_factor=entry.conv_factor, conv_40s=entry.conv_40s,
+                    pne_bondas=entry.pne_bondas,
+                    woh=entry.woh, mw=entry.mw, clg_lc=entry.clg_lc,
+                    er=entry.er, la_pf=entry.la_pf, bss=entry.bss,
+                    lap=entry.lap, dd=entry.dd,
+                )
+                all_rows.append(_build_entry(row_id, run_id, body.date, body.shift, body.mill, entry, c))
 
-        # Single bulk INSERT — one DB round trip for all 40 rows
-        cur.executemany("""
-            INSERT INTO daily_working (
-                id, run_id, date, shift, mill, department,
-                spindles_installed, rf_no, count, spdl_speed, tpi, std_hank,
-                conv_factor, conv_40s,
-                act_hank, stop_min, pne_bondas,
-                worked_spindles, target_kgs, prodn_kgs,
-                waste_pct, actual_prdn,
-                std_gps, actual_gps, diff_plus_minus, con_40s_gps, eff_pct,
-                woh, mw, clg_lc, er, la_pf, bss, lap, dd, total_stop
-            ) VALUES (
-                %s,%s,%s,%s,%s,'SPINNING',
-                %s,%s,%s,%s,%s,%s,
-                %s,%s,
-                %s,%s,%s,
-                %s,%s,%s,
-                %s,%s,
-                %s,%s,%s,%s,%s,
-                %s,%s,%s,%s,%s,%s,%s,%s,%s
-            )
-        """, all_rows)
-        saved = len(all_rows)
-
-        conn.commit()
-        cur.close()
+            cur.executemany("""
+                INSERT INTO daily_working (
+                    id, run_id, date, shift, mill, department,
+                    spindles_installed, rf_no, count, spdl_speed, tpi, std_hank,
+                    conv_factor, conv_40s,
+                    act_hank, stop_min, pne_bondas,
+                    worked_spindles, target_kgs, prodn_kgs,
+                    waste_pct, actual_prdn,
+                    std_gps, actual_gps, diff_plus_minus, con_40s_gps, eff_pct,
+                    woh, mw, clg_lc, er, la_pf, bss, lap, dd, total_stop
+                ) VALUES (
+                    %s,%s,%s,%s,%s,'SPINNING',
+                    %s,%s,%s,%s,%s,%s,
+                    %s,%s,
+                    %s,%s,%s,
+                    %s,%s,%s,
+                    %s,%s,
+                    %s,%s,%s,%s,%s,
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s
+                )
+            """, all_rows)
+            saved = len(all_rows)
+            conn.commit()
     except HTTPException:
         raise
     except Exception as e:
-        conn.rollback()
         raise HTTPException(500, f"Save failed: {str(e)}")
-    finally:
-        conn.close()
 
     return {"success": True, "run_id": run_id, "saved": saved}
 
