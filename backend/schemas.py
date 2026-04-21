@@ -83,3 +83,18 @@ class AdminInsertIn(BaseModel):
     date:  date
     shift: str
     mill:  str
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+class CreateUserIn(BaseModel):
+    username: str
+    password: str
+    role: str = "viewer"
+
+class UpdateUserIn(BaseModel):
+    role:     Optional[str] = None
+    password: Optional[str] = None

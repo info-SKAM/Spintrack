@@ -3,14 +3,19 @@ import uuid
 from typing import Optional
 from functools import lru_cache
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from datetime import date, timedelta
+
+from fastapi import FastAPI, HTTPException, Query, Request, Depends
 from fastapi.responses import Response
 from dotenv import load_dotenv
 
 from database import get_conn
 from formulas import calc_row, calc_conversion_factor, calc_std_hank
 from schemas import (SaveShiftIn, PatchRowIn, MachineMasterIn, MachineMasterUpdate,
-                     CountMasterIn, CountMasterUpdate, AdminInsertIn)
+                     CountMasterIn, CountMasterUpdate, AdminInsertIn,
+                     LoginIn, CreateUserIn, UpdateUserIn)
+from auth import (hash_password, verify_password, create_token,
+                  get_current_user, require_manager, require_admin)
 
 load_dotenv()
 
@@ -29,10 +34,108 @@ async def cors_middleware(request: Request, call_next):
     return response
 
 
+# ── Startup: ensure users table + default admin ───────────────────────────
+@app.on_event("startup")
+async def startup():
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id           SERIAL PRIMARY KEY,
+                        username     TEXT UNIQUE NOT NULL,
+                        password_hash TEXT NOT NULL,
+                        role         TEXT NOT NULL DEFAULT 'viewer'
+                                     CHECK (role IN ('admin','manager','viewer')),
+                        created_at   TIMESTAMPTZ DEFAULT NOW()
+                    )
+                """)
+                cur.execute("""
+                    INSERT INTO users (username, password_hash, role)
+                    VALUES ('admin', %s, 'admin')
+                    ON CONFLICT (username) DO NOTHING
+                """, (hash_password("admin123"),))
+            conn.commit()
+    except Exception as e:
+        print(f"Startup init error: {e}")
+
+
 # ── Health ────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+# ── Auth ──────────────────────────────────────────────────────────────────
+@app.post("/api/auth/login")
+def login(body: LoginIn):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM users WHERE username = %s", (body.username,))
+            user = cur.fetchone()
+    if not user or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(401, "Invalid username or password")
+    token = create_token(user["username"], user["role"])
+    return {"token": token, "username": user["username"], "role": user["role"]}
+
+@app.get("/api/auth/me")
+def me(user: dict = Depends(get_current_user)):
+    return {"username": user["sub"], "role": user["role"]}
+
+
+# ── User management (admin only) ──────────────────────────────────────────
+@app.get("/api/users")
+def list_users(_: dict = Depends(require_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, username, role, created_at FROM users ORDER BY id")
+            return [dict(r) for r in cur.fetchall()]
+
+@app.post("/api/users", status_code=201)
+def create_user(body: CreateUserIn, _: dict = Depends(require_admin)):
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO users (username, password_hash, role)
+                    VALUES (%s, %s, %s) RETURNING id, username, role
+                """, (body.username, hash_password(body.password), body.role))
+                row = dict(cur.fetchone())
+            conn.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(409, "Username already exists")
+    return row
+
+@app.put("/api/users/{user_id}")
+def update_user(user_id: int, body: UpdateUserIn, _: dict = Depends(require_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if body.role:
+                cur.execute(
+                    "UPDATE users SET role=%s WHERE id=%s RETURNING id,username,role",
+                    (body.role, user_id)
+                )
+            elif body.password:
+                cur.execute(
+                    "UPDATE users SET password_hash=%s WHERE id=%s RETURNING id,username,role",
+                    (hash_password(body.password), user_id)
+                )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "User not found")
+        conn.commit()
+    return dict(row)
+
+@app.delete("/api/users/{user_id}", status_code=204)
+def delete_user(user_id: int, _: dict = Depends(require_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM users WHERE id=%s", (user_id,))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "User not found")
+        conn.commit()
 
 
 # ── Mills + Frames ────────────────────────────────────────────────────────
@@ -230,7 +333,7 @@ def save_shift(body: SaveShiftIn):
 
 
 @app.patch("/api/daily-working/{row_id}")
-def patch_row(row_id: str, body: PatchRowIn):
+def patch_row(row_id: str, body: PatchRowIn, user: dict = Depends(get_current_user)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM daily_working WHERE id = %s", (row_id,))
@@ -238,6 +341,10 @@ def patch_row(row_id: str, body: PatchRowIn):
             if not existing:
                 raise HTTPException(404, "Row not found")
             r = dict(existing)
+            if user.get("role") == "viewer":
+                today = date.today()
+                if r["date"] < today - timedelta(days=1):
+                    raise HTTPException(403, "Viewers can only edit today or yesterday's entries")
             def pick(f): v = getattr(body, f); return v if v is not None else (r.get(f) or 0)
             c = calc_row(
                 no_of_spindles=r["spindles_installed"],
@@ -344,7 +451,7 @@ def update_all_rows(body: dict):
 
 
 @app.delete("/api/daily-working/{row_id}", status_code=204)
-def delete_daily_working_row(row_id: str):
+def delete_daily_working_row(row_id: str, _: dict = Depends(require_manager)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM daily_working WHERE id = %s", (row_id,))
@@ -409,7 +516,7 @@ def get_machine_master(mill: Optional[str] = None):
 
 
 @app.post("/api/machine-master", status_code=201)
-def create_machine(body: MachineMasterIn):
+def create_machine(body: MachineMasterIn, _: dict = Depends(require_manager)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -423,7 +530,7 @@ def create_machine(body: MachineMasterIn):
 
 
 @app.put("/api/machine-master/{machine_id}")
-def update_machine(machine_id: int, body: MachineMasterUpdate):
+def update_machine(machine_id: int, body: MachineMasterUpdate, _: dict = Depends(require_manager)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM machine_master WHERE id=%s", (machine_id,))
@@ -443,7 +550,7 @@ def update_machine(machine_id: int, body: MachineMasterUpdate):
 
 
 @app.delete("/api/machine-master/{machine_id}", status_code=204)
-def delete_machine(machine_id: int):
+def delete_machine(machine_id: int, _: dict = Depends(require_manager)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM machine_master WHERE id=%s", (machine_id,))
@@ -461,7 +568,7 @@ def get_count_master_list():
 
 
 @app.post("/api/count-master", status_code=201)
-def create_count(body: CountMasterIn):
+def create_count(body: CountMasterIn, _: dict = Depends(require_manager)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -484,7 +591,7 @@ def create_count(body: CountMasterIn):
 
 
 @app.put("/api/count-master/{count_id}")
-def update_count(count_id: int, body: CountMasterUpdate):
+def update_count(count_id: int, body: CountMasterUpdate, _: dict = Depends(require_manager)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT * FROM count_master WHERE id=%s", (count_id,))
@@ -505,7 +612,7 @@ def update_count(count_id: int, body: CountMasterUpdate):
 
 
 @app.delete("/api/count-master/{count_id}", status_code=204)
-def delete_count(count_id: int):
+def delete_count(count_id: int, _: dict = Depends(require_manager)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM count_master WHERE id=%s", (count_id,))

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { api } from '../api.js'
 import { calcStdHank } from '../utils/formulas.js'
 import { useToast } from '../hooks/useToast.jsx'
+import { useAuth } from '../context/AuthContext.jsx'
 import '../components/MasterTable.css'
 
 const MILLS = ['A-MILL', 'B-MILL', 'C-MILL', 'D-MILL']
@@ -21,6 +22,7 @@ function liveStdHank(hank_eff, spdl_speed, tpi) {
 }
 
 export default function MachineMasterPage() {
+  const { canManage } = useAuth()
   const [rows,       setRows]       = useState([])
   const [counts,     setCounts]     = useState([])  // count master for hank_eff lookup
   const [loading,    setLoading]    = useState(false)
@@ -270,7 +272,8 @@ export default function MachineMasterPage() {
                     </td>
 
                     <td className="td-actions">
-                      {isEdit ? (
+                      {!canManage ? <span style={{color:'#555',fontSize:12}}>View only</span>
+                      : isEdit ? (
                         <div className="act-btns">
                           <button className="act-btn save"   onClick={saveEdit}>✓</button>
                           <button className="act-btn cancel" onClick={cancelEdit}>✕</button>
@@ -294,8 +297,8 @@ export default function MachineMasterPage() {
           </table>
         </div>
 
-        {/* Add form */}
-        <div className="add-form">
+        {/* Add form — managers/admins only */}
+        {!canManage ? null : <div className="add-form">
           <div className="add-field" style={{maxWidth:120}}>
             <label className="add-label">Mill</label>
             <select className="add-input" value={addRow.mill}
@@ -354,7 +357,7 @@ export default function MachineMasterPage() {
           <button className="btn-success" onClick={addMachine} disabled={adding} style={{alignSelf:'flex-end'}}>
             {adding ? <><span className="spinner"/>Adding…</> : '+ Add Machine'}
           </button>
-        </div>
+        </div>}
       </div>
       <ToastContainer />
     </div>

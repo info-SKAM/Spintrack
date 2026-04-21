@@ -1,5 +1,7 @@
 const BASE = (import.meta.env.VITE_API_URL || '') + '/api'
 
+export const getToken = () => localStorage.getItem('st_token')
+
 // ── Simple in-memory cache ────────────────────────────────────────────────
 const _cache = new Map()
 function cached(key, fn, ttlMs = 60000) {
@@ -14,7 +16,16 @@ export function clearCache(prefix) {
 }
 
 async function req(path, opts = {}) {
-  const res = await fetch(BASE + path, { headers: { 'Content-Type': 'application/json' }, ...opts })
+  const token = getToken()
+  const headers = { 'Content-Type': 'application/json' }
+  if (token) headers['Authorization'] = `Bearer ${token}`
+  const res = await fetch(BASE + path, { headers, ...opts })
+  if (res.status === 401) {
+    localStorage.removeItem('st_token')
+    localStorage.removeItem('st_user')
+    window.location.reload()
+    return
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || res.statusText)
@@ -24,6 +35,16 @@ async function req(path, opts = {}) {
 }
 
 export const api = {
+  // Auth
+  login:      (username, password) => req('/auth/login', { method: 'POST', body: JSON.stringify({ username, password }) }),
+  me:         ()                   => req('/auth/me'),
+
+  // Users (admin only)
+  getUsers:   ()         => req('/users'),
+  createUser: (body)     => req('/users',      { method: 'POST',   body: JSON.stringify(body) }),
+  updateUser: (id, body) => req(`/users/${id}`, { method: 'PUT',    body: JSON.stringify(body) }),
+  deleteUser: (id)       => req(`/users/${id}`, { method: 'DELETE' }),
+
   // Mills — cached 5 minutes (rarely changes)
   getMills: () => cached('mills', () => req('/mills'), 5 * 60000),
 

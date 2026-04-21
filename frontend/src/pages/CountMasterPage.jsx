@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { api } from '../api.js'
 import { calcConvFactor } from '../utils/formulas.js'
 import { useToast } from '../hooks/useToast.jsx'
+import { useAuth } from '../context/AuthContext.jsx'
 import '../components/MasterTable.css'
 
 const BLANK = {
@@ -18,6 +19,7 @@ function liveConvFactor(actual_count, spin_eff) {
 }
 
 export default function CountMasterPage() {
+  const { canManage } = useAuth()
   const [rows,       setRows]       = useState([])
   const [loading,    setLoading]    = useState(false)
   const [search,     setSearch]     = useState('')
@@ -203,7 +205,8 @@ export default function CountMasterPage() {
                     </td>
 
                     <td className="td-actions">
-                      {isEdit ? (
+                      {!canManage ? <span style={{color:'#555',fontSize:12}}>View only</span>
+                      : isEdit ? (
                         <div className="act-btns">
                           <button className="act-btn save"   onClick={saveEdit}>✓</button>
                           <button className="act-btn cancel" onClick={cancelEdit}>✕</button>
@@ -227,8 +230,8 @@ export default function CountMasterPage() {
           </table>
         </div>
 
-        {/* Add form */}
-        <div className="add-form">
+        {/* Add form — managers/admins only */}
+        {!canManage ? null : <div className="add-form">
           <div className="add-field" style={{maxWidth:110}}>
             <label className="add-label">Count *</label>
             <input className="add-input" placeholder="40SPSF"
@@ -275,7 +278,7 @@ export default function CountMasterPage() {
           <button className="btn-success" onClick={addCount} disabled={adding} style={{alignSelf:'flex-end'}}>
             {adding ? <><span className="spinner"/>Adding…</> : '+ Add Count'}
           </button>
-        </div>
+        </div>}
       </div>
       <ToastContainer />
     </div>
